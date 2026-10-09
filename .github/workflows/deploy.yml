@@ -15,27 +15,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Unzip uploaded project
+      - name: Unzip uploaded project and locate project root
         run: |
           mkdir -p app
           unzip -o -q *.zip -d app
+          ROOT=$(dirname "$(find app -maxdepth 3 -name package-lock.json | head -1)")
+          echo "Project root: $ROOT"
+          echo "PROJECT_DIR=$ROOT" >> "$GITHUB_ENV"
+          ls "$ROOT"
       - uses: actions/setup-node@v4
         with:
           node-version: 20
       - name: Create .env (public values)
-        working-directory: app
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           echo "VITE_SUPABASE_URL=https://hxcwzpeosplyplsvtvkg.supabase.co" > .env
           echo "VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_WlYhBCnXLYnPsg8zfZZFVA_YFZlh9jz" >> .env
       - name: Install and build
-        working-directory: app
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
           npm ci
           npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: app/dist
+          path: ${{ env.PROJECT_DIR }}/dist
   deploy:
     needs: build
     runs-on: ubuntu-latest
