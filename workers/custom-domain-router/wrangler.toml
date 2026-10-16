@@ -1,0 +1,15 @@
+name = "academic-profile-domain-router"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+# Hostname lives inside our own zone — a plain Worker route is enough.
+# Prerequisite DNS (added manually, additive only — no existing record touched):
+#   AAAA  echchiaa  100::  Proxied
+routes = [
+  { pattern = "echchiaa.elbordiji.com/*", zone_name = "elbordiji.com" },
+]
+
+# Set with: wrangler secret put SUPABASE_ANON_KEY
+# (anon/publishable key only — NEVER the service-role key)
+[vars]
+SUPABASE_URL = "https://hxcwzpeosplyplsvtvkg.supabase.co"
