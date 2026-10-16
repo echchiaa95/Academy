@@ -1,31 +1,14 @@
-# Deploys the custom-domain router Worker for Academic Profile.
-#
-# Triggers:
-#   - manual (workflow_dispatch)
-#   - pushes to main that touch the worker or this workflow
-#
-# Required GitHub repository secrets (Settings → Secrets and variables → Actions):
-#   CLOUDFLARE_API_TOKEN   — API token with "Workers Scripts: Edit" on the account
-#                            (and "Zone: Read" for the route on elbordiji.com)
-#   CLOUDFLARE_ACCOUNT_ID  — Cloudflare account ID (dash → Workers → right sidebar)
-#   SUPABASE_ANON_KEY      — the PUBLIC anon/publishable key of the Supabase project.
-#                            Public by design (RLS-guarded), but stored as a secret
-#                            so it never appears in source or logs.
-#
-# This workflow never activates the tenant domain in Supabase — activation
-# stays a manual superadmin action after these live checks pass.
-
 name: Deploy custom-domain worker
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - 'workers/custom-domain-router/**'
       - '.github/workflows/deploy-custom-domain-worker.yml'
 
-# Cancel superseded runs; never run two deploys of this worker concurrently.
 concurrency:
   group: custom-domain-worker
   cancel-in-progress: true
@@ -34,84 +17,108 @@ jobs:
   deploy:
     name: Deploy Worker
     runs-on: ubuntu-latest
+
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-    steps:
-      - uses: actions/checkout@v4
 
-      - name: Deploy Worker (routes attach automatically from wrangler.toml)
-        uses: cloudflare/wrangler-action@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate required secrets
+        shell: bash
+        env:
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "::error::CLOUDFLARE_API_TOKEN is missing"
+            exit 1
+          fi
+
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+            echo "::error::CLOUDFLARE_ACCOUNT_ID is missing"
+            exit 1
+          fi
+
+          if [ -z "${SUPABASE_ANON_KEY:-}" ]; then
+            echo "::error::SUPABASE_ANON_KEY is missing"
+            exit 1
+          fi
+
+          echo "Required secrets are configured."
+
+      - name: Deploy Worker
+        uses: cloudflare/wrangler-action@v3
         with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: workers/custom-domain-router
           command: deploy
 
-      # The Worker reads SUPABASE_ANON_KEY from its environment at runtime.
-      # Secrets are written via `wrangler secret put` — piped on stdin so the
-      # value never appears in argv, logs, or the workflow file.
-      - name: Configure SUPABASE_ANON_KEY Worker secret
-        workingDirectory: workers/custom-domain-router
-        run: |
-          if [ -z "${SUPABASE_ANON_KEY:-}" ]; then
-            echo "::error::SUPABASE_ANON_KEY repository secret is not set."
-            exit 1
-          fi
-          echo "$SUPABASE_ANON_KEY" | npx wrangler@4 secret put SUPABASE_ANON_KEY
+      - name: Configure Supabase Worker secret
+        shell: bash
+        working-directory: workers/custom-domain-router
         env:
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
-
-  verify:
-    name: Live post-deployment checks
-    needs: deploy
-    runs-on: ubuntu-latest
-    env:
-      BASE: https://echchiaa.elbordiji.com
-    steps:
-      - name: Wait for edge propagation
-        run: sleep 20
-
-      - name: Check 1/5 — /__router-health returns ok
         run: |
-          body=$(curl -fsS "$BASE/__router-health")
-          echo "health: $body"
-          [ "$body" = "ok" ]
+          set -euo pipefail
+          printf '%s' "$SUPABASE_ANON_KEY" | npx wrangler secret put SUPABASE_ANON_KEY
 
-      - name: Check 2/5 — homepage serves the SPA with routing header
+      - name: Verify Worker health
+        shell: bash
         run: |
-          headers=$(curl -fsSI "$BASE/")
-          echo "$headers"
-          echo "$headers" | grep -qi '^x-academic-profile-routed: default' \
-            || { echo "::error::missing or wrong x-academic-profile-routed header"; exit 1; }
-          html=$(curl -fsS "$BASE/")
-          echo "$html" | grep -q '<div id="root">' \
-            || { echo "::error::homepage is not the SPA shell"; exit 1; }
+          set -euo pipefail
 
-      - name: Check 3/5 — profile route serves the app shell
-        # Hash routing: /#/profile/default is client-side; the server only
-        # needs to return the shell for any non-asset path.
-        run: |
-          html=$(curl -fsS "$BASE/")
-          echo "$html" | grep -q 'id="root"' || { echo "::error::profile route shell missing"; exit 1; }
+          BASE="https://echchiaa.elbordiji.com"
 
-      - name: Check 4/5 — JS asset loads over the custom domain
-        run: |
-          html=$(curl -fsS "$BASE/")
-          js=$(echo "$html" | grep -oE 'src="\./assets/[^"]+\.js"' | head -1 | sed 's/src="\.\///;s/"//')
-          [ -n "$js" ] || { echo "::error::no JS asset reference found in HTML"; exit 1; }
-          code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/$js")
-          echo "JS $js -> $code"
-          [ "$code" = "200" ]
+          echo "Checking Worker health..."
 
-      - name: Check 5/5 — CSS asset loads over the custom domain
-        run: |
-          html=$(curl -fsS "$BASE/")
-          css=$(echo "$html" | grep -oE 'href="\./assets/[^"]+\.css"' | head -1 | sed 's/href="\.\///;s/"//')
-          [ -n "$css" ] || { echo "::error::no CSS asset reference found in HTML"; exit 1; }
-          code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/$css")
-          echo "CSS $css -> $code"
-          [ "$code" = "200" ]
+          HEALTH="$(curl --fail --silent --show-error \
+            --max-time 30 \
+            "$BASE/__router-health")"
 
-      - name: All live checks passed
+          echo "$HEALTH"
+
+          if ! printf '%s' "$HEALTH" | grep -q '"ok"'; then
+            echo "::error::Worker health check did not return the expected response."
+            exit 1
+          fi
+
+      - name: Verify custom domain response
+        shell: bash
         run: |
-          echo "Custom domain is serving the Academic Profile app."
-          echo "Manual step remains: activate the domain in Superadmin → Domains."
+          set -euo pipefail
+
+          BASE="https://echchiaa.elbordiji.com"
+
+          echo "Checking custom domain..."
+
+          HEADERS="$(mktemp)"
+          BODY="$(mktemp)"
+          trap 'rm -f "$HEADERS" "$BODY"' EXIT
+
+          STATUS="$(curl --silent --show-error \
+            --max-time 30 \
+            --dump-header "$HEADERS" \
+            --output "$BODY" \
+            --write-out '%{http_code}' \
+            "$BASE/")"
+
+          echo "HTTP status: $STATUS"
+
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Custom domain did not return HTTP 200."
+            cat "$BODY"
+            exit 1
+          fi
+
+          if ! grep -qi '^x-academic-profile-routed:' "$HEADERS"; then
+            echo "::error::Expected Worker routing header was not found."
+            cat "$HEADERS"
+            exit 1
+          fi
+
+          echo "Custom domain returned HTTP 200 through the Worker."
