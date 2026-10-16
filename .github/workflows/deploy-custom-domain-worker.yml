@@ -1,0 +1,117 @@
+# Deploys the custom-domain router Worker for Academic Profile.
+#
+# Triggers:
+#   - manual (workflow_dispatch)
+#   - pushes to main that touch the worker or this workflow
+#
+# Required GitHub repository secrets (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN   — API token with "Workers Scripts: Edit" on the account
+#                            (and "Zone: Read" for the route on elbordiji.com)
+#   CLOUDFLARE_ACCOUNT_ID  — Cloudflare account ID (dash → Workers → right sidebar)
+#   SUPABASE_ANON_KEY      — the PUBLIC anon/publishable key of the Supabase project.
+#                            Public by design (RLS-guarded), but stored as a secret
+#                            so it never appears in source or logs.
+#
+# This workflow never activates the tenant domain in Supabase — activation
+# stays a manual superadmin action after these live checks pass.
+
+name: Deploy custom-domain worker
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'workers/custom-domain-router/**'
+      - '.github/workflows/deploy-custom-domain-worker.yml'
+
+# Cancel superseded runs; never run two deploys of this worker concurrently.
+concurrency:
+  group: custom-domain-worker
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Deploy Worker
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy Worker (routes attach automatically from wrangler.toml)
+        uses: cloudflare/wrangler-action@v4
+        with:
+          workingDirectory: workers/custom-domain-router
+          command: deploy
+
+      # The Worker reads SUPABASE_ANON_KEY from its environment at runtime.
+      # Secrets are written via `wrangler secret put` — piped on stdin so the
+      # value never appears in argv, logs, or the workflow file.
+      - name: Configure SUPABASE_ANON_KEY Worker secret
+        workingDirectory: workers/custom-domain-router
+        run: |
+          if [ -z "${SUPABASE_ANON_KEY:-}" ]; then
+            echo "::error::SUPABASE_ANON_KEY repository secret is not set."
+            exit 1
+          fi
+          echo "$SUPABASE_ANON_KEY" | npx wrangler@4 secret put SUPABASE_ANON_KEY
+        env:
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+
+  verify:
+    name: Live post-deployment checks
+    needs: deploy
+    runs-on: ubuntu-latest
+    env:
+      BASE: https://echchiaa.elbordiji.com
+    steps:
+      - name: Wait for edge propagation
+        run: sleep 20
+
+      - name: Check 1/5 — /__router-health returns ok
+        run: |
+          body=$(curl -fsS "$BASE/__router-health")
+          echo "health: $body"
+          [ "$body" = "ok" ]
+
+      - name: Check 2/5 — homepage serves the SPA with routing header
+        run: |
+          headers=$(curl -fsSI "$BASE/")
+          echo "$headers"
+          echo "$headers" | grep -qi '^x-academic-profile-routed: default' \
+            || { echo "::error::missing or wrong x-academic-profile-routed header"; exit 1; }
+          html=$(curl -fsS "$BASE/")
+          echo "$html" | grep -q '<div id="root">' \
+            || { echo "::error::homepage is not the SPA shell"; exit 1; }
+
+      - name: Check 3/5 — profile route serves the app shell
+        # Hash routing: /#/profile/default is client-side; the server only
+        # needs to return the shell for any non-asset path.
+        run: |
+          html=$(curl -fsS "$BASE/")
+          echo "$html" | grep -q 'id="root"' || { echo "::error::profile route shell missing"; exit 1; }
+
+      - name: Check 4/5 — JS asset loads over the custom domain
+        run: |
+          html=$(curl -fsS "$BASE/")
+          js=$(echo "$html" | grep -oE 'src="\./assets/[^"]+\.js"' | head -1 | sed 's/src="\.\///;s/"//')
+          [ -n "$js" ] || { echo "::error::no JS asset reference found in HTML"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/$js")
+          echo "JS $js -> $code"
+          [ "$code" = "200" ]
+
+      - name: Check 5/5 — CSS asset loads over the custom domain
+        run: |
+          html=$(curl -fsS "$BASE/")
+          css=$(echo "$html" | grep -oE 'href="\./assets/[^"]+\.css"' | head -1 | sed 's/href="\.\///;s/"//')
+          [ -n "$css" ] || { echo "::error::no CSS asset reference found in HTML"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/$css")
+          echo "CSS $css -> $code"
+          [ "$code" = "200" ]
+
+      - name: All live checks passed
+        run: |
+          echo "Custom domain is serving the Academic Profile app."
+          echo "Manual step remains: activate the domain in Superadmin → Domains."
