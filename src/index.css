@@ -1,0 +1,93 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 20 14% 4%;
+    --foreground: 40 20% 92%;
+    --card: 24 12% 7%;
+    --card-foreground: 40 20% 92%;
+    --popover: 24 12% 7%;
+    --popover-foreground: 40 20% 92%;
+    --primary: 40 45% 57%;
+    --primary-foreground: 24 20% 8%;
+    --secondary: 30 10% 14%;
+    --secondary-foreground: 40 20% 88%;
+    --muted: 30 8% 14%;
+    --muted-foreground: 35 10% 60%;
+    --accent: 40 45% 57%;
+    --accent-foreground: 24 20% 8%;
+    --destructive: 0 62% 45%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 35 12% 16%;
+    --input: 35 12% 18%;
+    --ring: 40 45% 57%;
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  html { scroll-behavior: smooth; }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', 'Noto Sans Arabic', system-ui, sans-serif;
+  }
+  [dir="rtl"] body, [dir="rtl"] { font-family: 'Noto Sans Arabic', 'Inter', system-ui, sans-serif; }
+  .font-display { font-family: 'Cormorant Garamond', 'Amiri', serif; }
+  [dir="rtl"] .font-display { font-family: 'Amiri', 'Cormorant Garamond', serif; }
+  ::selection { background: hsl(40 45% 57% / 0.3); }
+}
+
+@layer utilities {
+  .gold-text { @apply text-[#c8a45c]; }
+  .hairline { @apply border-t border-border/60; }
+  .glass { @apply bg-card/60 backdrop-blur-md border border-border/60; }
+  .reveal { opacity: 0; transform: translateY(24px); transition: opacity .8s cubic-bezier(.22,1,.36,1), transform .8s cubic-bezier(.22,1,.36,1); }
+  .reveal.is-visible { opacity: 1; transform: none; }
+  .img-zoom img { transition: transform 1.2s cubic-bezier(.22,1,.36,1); }
+  .img-zoom:hover img { transform: scale(1.04); }
+}
+
+/* Prose for article content (markdown-lite renderer output) */
+.article-body { @apply text-lg leading-9 text-foreground/90 space-y-6; }
+.article-body h2 { @apply font-display text-3xl font-semibold mt-10 mb-3 gold-text; }
+.article-body h3 { @apply font-display text-2xl font-semibold mt-8 mb-2; }
+.article-body p { @apply my-4; }
+.article-body strong { @apply font-semibold text-foreground; }
+.article-body em { @apply italic; }
+.article-body ul { @apply list-disc ps-7 space-y-2 my-4; }
+.article-body ol { @apply list-decimal ps-7 space-y-2 my-4; }
+.article-body blockquote { @apply border-s-2 border-[#c8a45c] ps-5 py-1 my-6 text-muted-foreground italic font-display text-xl; }
+.article-body a { @apply text-[#c8a45c] underline underline-offset-4 hover:opacity-80; }
+.article-body img { @apply rounded-xl my-6 w-full; }
+.article-body hr { @apply border-border my-8; }
+
+/* Landing page: cinematic hero entrance — staggered, short, non-blocking.
+   Content remains reachable immediately (elements only fade/slide in). */
+@keyframes lp-fade-up {
+  from { opacity: 0; transform: translateY(28px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes lp-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.lp-hero-1 { animation: lp-fade-up .8s cubic-bezier(.22,1,.36,1) .15s forwards; }
+.lp-hero-2 { animation: lp-fade-up .9s cubic-bezier(.22,1,.36,1) .35s forwards; }
+.lp-hero-3 { animation: lp-fade-up .9s cubic-bezier(.22,1,.36,1) .55s forwards; }
+.lp-hero-4 { animation: lp-fade-up .9s cubic-bezier(.22,1,.36,1) .75s forwards; }
+.lp-hero-late { animation: lp-fade-in 1.6s ease-out .3s forwards; }
+
+/* Respect reduced-motion everywhere: instant content, no movement. */
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .reveal { opacity: 1 !important; transform: none !important; transition: none !important; }
+  .lp-hero-1, .lp-hero-2, .lp-hero-3, .lp-hero-4, .lp-hero-late { animation: none !important; opacity: 1 !important; }
+  *, *::before, *::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+  }
+}

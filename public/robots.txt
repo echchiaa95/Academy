@@ -1,0 +1,7 @@
+# robots.txt — public pages are indexable; admin/auth live behind hash routes
+# (#/admin, #/login) which crawlers cannot index as separate URLs.
+# This file is NOT an authorization mechanism — RLS protects the data.
+User-agent: *
+Allow: /
+
+Sitemap: /sitemap.xml

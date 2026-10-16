@@ -1,4 +1,4 @@
-name: Deploy from ZIP
+name: Deploy to GitHub Pages
 on:
   push:
     branches: [main]
@@ -15,31 +15,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Unzip uploaded project and locate project root
-        run: |
-          mkdir -p app
-          unzip -o -q *.zip -d app
-          ROOT=$(dirname "$(find app -maxdepth 3 -name package-lock.json | head -1)")
-          echo "Project root: $ROOT"
-          echo "PROJECT_DIR=$ROOT" >> "$GITHUB_ENV"
-          ls "$ROOT"
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Create .env (public values)
-        working-directory: ${{ env.PROJECT_DIR }}
+          cache: npm
+      - name: Create .env from repository variables
+        # Both values are PUBLIC (VITE_* is embedded in the client bundle) —
+        # repository Variables suffice; no Secrets needed. Either key
+        # variable works (publishable preferred, legacy anon as fallback).
         run: |
-          echo "VITE_SUPABASE_URL=https://hxcwzpeosplyplsvtvkg.supabase.co" > .env
-          echo "VITE_SUPABASE_PUBLISHABLE_KEY=sb_publishable_WlYhBCnXLYnPsg8zfZZFVA_YFZlh9jz" >> .env
-      - name: Install and build
-        working-directory: ${{ env.PROJECT_DIR }}
-        run: |
-          npm ci
-          npm run build
+          echo "VITE_SUPABASE_URL=${{ vars.VITE_SUPABASE_URL }}" > .env
+          echo "VITE_SUPABASE_PUBLISHABLE_KEY=${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}" >> .env
+          echo "VITE_SUPABASE_ANON_KEY=${{ vars.VITE_SUPABASE_ANON_KEY }}" >> .env
+      - run: npm ci
+      # Prerender published content to real per-language URLs, then build the sitemap
+      # from the generated files. Requires SITE_BASE_URL; skipped cleanly without it.
+      - name: Prerender static language pages
+        run: node scripts/prerender.mjs
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+          SITE_BASE_URL: ${{ vars.SITE_BASE_URL }}
+      - name: Generate sitemap
+        run: node scripts/build-sitemap.mjs
+        env:
+          SITE_BASE_URL: ${{ vars.SITE_BASE_URL }}
+      - run: npm run build
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: ${{ env.PROJECT_DIR }}/dist
+          path: dist
   deploy:
     needs: build
     runs-on: ubuntu-latest
