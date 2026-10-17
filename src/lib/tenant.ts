@@ -7,10 +7,16 @@ import { supabase } from './supabase'
 import type { TenantResolution } from '@/types'
 
 export function isPlatformHost(hostname = window.location.hostname) {
+  const host = hostname.toLowerCase().split(':')[0]
+
   return (
-    hostname === 'localhost' || hostname === '127.0.0.1' ||
-    hostname.endsWith('.github.io') || hostname.endsWith('.ok.kimi.link') ||
-    hostname.endsWith('.kimi.link') || hostname.endsWith('.app.github.dev')
+    host === 'academy.elbordiji.com' ||
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host.endsWith('.github.io') ||
+    host.endsWith('.ok.kimi.link') ||
+    host.endsWith('.kimi.link') ||
+    host.endsWith('.app.github.dev')
   )
 }
 
