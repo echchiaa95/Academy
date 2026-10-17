@@ -544,13 +544,90 @@ export async function setPrimaryDomain(d: TenantDomain) {
 // caller, and invokes the service_role-only verify_domain_server RPC.
 // There is NO browser-observed fallback: if the function is not deployed
 // or unreachable, verification fails closed and the domain stays pending.
-export async function verifyDomainDns(d: TenantDomain): Promise<'verified' | 'mismatch' | 'error'> {
+export async function verifyDomainDns(
+  d: TenantDomain,
+): Promise<'verified' | 'mismatch' | 'error'> {
   if (!supabase) return 'error'
+
   try {
-    const { data, error } = await supabase.functions.invoke('verify-domain', { body: { domain_id: d.id } })
-    if (error) return 'error'
-    return (data?.result as 'verified' | 'mismatch') ?? 'error'
-  } catch { return 'error' }
+    const { data: verification, error: verificationError } =
+      await supabase.functions.invoke('verify-domain', {
+        body: { domain_id: d.id },
+      })
+
+    if (verificationError) {
+      console.error('Domain verification failed:', verificationError.message)
+      return 'error'
+    }
+
+    if (verification?.result === 'mismatch') return 'mismatch'
+    if (verification?.result !== 'verified') return 'error'
+
+    const { data: domain, error: reloadError } = await supabase
+      .from('tenant_domains')
+      .select('*')
+      .eq('id', d.id)
+      .eq('tenant_id', d.tenant_id)
+      .maybeSingle()
+
+    if (reloadError || !domain) {
+      console.error('Could not reload domain:', reloadError?.message)
+      return 'error'
+    }
+
+    if (domain.status !== 'verified' || !domain.verified_at) {
+      console.error('Domain verification was not persisted')
+      return 'error'
+    }
+
+    const hostname = normalizeHostname(domain.hostname)
+
+    // Internal platform domains are not Cloudflare SaaS customer domains.
+    if (
+      hostname === 'elbordiji.com' ||
+      hostname.endsWith('.elbordiji.com')
+    ) {
+      return 'verified'
+    }
+
+    const { data: registration, error: registrationError } =
+      await supabase.functions.invoke('register-custom-domain', {
+        body: {
+          tenant_id: domain.tenant_id,
+          hostname,
+        },
+      })
+
+    if (registrationError) {
+      console.error(
+        'Cloudflare registration request failed:',
+        registrationError.message,
+      )
+      return 'error'
+    }
+
+    if (!registration?.success) {
+      console.error(
+        'Cloudflare registration failed:',
+        registration?.error ?? 'Unknown error',
+      )
+      return 'error'
+    }
+
+    console.info('Cloudflare registration result:', {
+      hostname,
+      cloudflare_status: registration.cloudflare_status,
+      cloudflare_ssl_status: registration.cloudflare_ssl_status,
+    })
+
+    return 'verified'
+  } catch (error) {
+    console.error(
+      'Domain verification error:',
+      error instanceof Error ? error.message : String(error),
+    )
+    return 'error'
+  }
 }
 
 // ---------- Storage ----------
